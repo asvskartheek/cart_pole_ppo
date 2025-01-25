@@ -1,3 +1,30 @@
+"""
+Proximal Policy Optimization (PPO) Implementation for CartPole Environment
+
+This module implements PPO, an on-policy reinforcement learning algorithm, to solve
+the CartPole-v1 environment from OpenAI Gymnasium. PPO is known for its stability
+and reliability in training deep RL agents.
+
+The implementation includes:
+- A neural network architecture with shared features and separate policy/value heads
+- Generalized Advantage Estimation (GAE) for computing advantages
+- Clipped surrogate objective for stable policy updates
+- Value function loss for better state value estimation
+- Policy entropy tracking for monitoring exploration
+
+Key Features:
+- Shared neural network architecture for policy and value functions
+- Experience collection using trajectory buffer
+- PPO-specific objective function with clipping
+- Visualization of training progress and policy entropy
+
+Example usage:
+    python ppo.py
+
+The script will train the agent and generate training curves once solved.
+"""
+
+from typing import List, Tuple, Optional
 import gymnasium as gym
 import torch
 import torch.nn as nn
@@ -6,51 +33,95 @@ import torch.optim as optim
 from torch.distributions import Categorical
 import matplotlib.pyplot as plt
 import numpy as np
+from numpy.typing import NDArray
 
 # Hyperparameters
-LEARNING_RATE = 5e-4
-DISCOUNT_FACTOR = 0.98
-GAE_LAMBDA = 0.95
-EPSILON_CLIP = 0.1
-EPOCHS_PER_UPDATE = 3
-TIMESTEPS_PER_BATCH = 20
-PRINT_FREQUENCY = 20
-MAX_EPISODES = 10_000
+LEARNING_RATE: float = 5e-4  # Learning rate for Adam optimizer
+DISCOUNT_FACTOR: float = 0.98  # Discount factor for future rewards
+GAE_LAMBDA: float = 0.95  # Lambda parameter for GAE
+EPSILON_CLIP: float = 0.1  # PPO clipping parameter
+EPOCHS_PER_UPDATE: int = 3  # Number of epochs per policy update
+TIMESTEPS_PER_BATCH: int = 20  # Number of timesteps per training batch
+PRINT_FREQUENCY: int = 20  # Episodes between printing progress
+MAX_EPISODES: int = 10_000  # Maximum number of training episodes
 
 
 class PPO(nn.Module):
-    def __init__(self):
+    """
+    PPO agent implementation using PyTorch.
+    
+    This class implements both the policy and value networks using a shared
+    feature extractor followed by separate heads. It handles experience
+    collection, advantage computation, and policy updates.
+    """
+    
+    def __init__(self) -> None:
+        """
+        Initialize the PPO agent with neural network architecture and optimizer.
+        """
         super(PPO, self).__init__()
-        self.trajectory_buffer = []
+        self.trajectory_buffer: List[Tuple] = []
 
-        self.shared_layer = nn.Linear(4, 256)
-        self.policy_head = nn.Linear(256, 2)
-        self.value_head = nn.Linear(256, 1)
+        # Neural network architecture
+        self.shared_layer = nn.Linear(4, 256)  # Shared features
+        self.policy_head = nn.Linear(256, 2)  # Policy output (2 actions)
+        self.value_head = nn.Linear(256, 1)  # Value function
         self.optimizer = optim.Adam(self.parameters(), lr=LEARNING_RATE)
 
-    def get_policy(self, state, softmax_dim=0):
+    def get_policy(self, state: torch.Tensor, softmax_dim: int = 0) -> torch.Tensor:
+        """
+        Compute policy distribution over actions for given state.
+
+        Args:
+            state: Current state observation
+            softmax_dim: Dimension to apply softmax (default=0)
+
+        Returns:
+            Action probabilities as a tensor
+        """
         features = F.relu(self.shared_layer(state))
         logits = self.policy_head(features)
         action_probs = F.softmax(logits, dim=softmax_dim)
         return action_probs
 
-    def get_value(self, state):
+    def get_value(self, state: torch.Tensor) -> torch.Tensor:
+        """
+        Compute value function estimate for given state.
+
+        Args:
+            state: Current state observation
+
+        Returns:
+            Estimated state value as a tensor
+        """
         features = F.relu(self.shared_layer(state))
         state_value = self.value_head(features)
         return state_value
 
-    def store_transition(self, transition):
+    def store_transition(self, transition: Tuple) -> None:
+        """
+        Store a transition tuple in the trajectory buffer.
+
+        Args:
+            transition: Tuple of (state, action, reward, next_state, action_prob, done)
+        """
         self.trajectory_buffer.append(transition)
 
-    def prepare_batch(self):
-        states, actions, rewards, next_states, action_probs, dones = (
-            [],
-            [],
-            [],
-            [],
-            [],
-            [],
-        )
+    def prepare_batch(self) -> Tuple[torch.Tensor, ...]:
+        """
+        Prepare training batch from stored trajectories.
+
+        Returns:
+            Tuple of tensors containing batch data:
+            (states, actions, rewards, next_states, dones, action_probs)
+        """
+        states: List = []
+        actions: List[List[int]] = []
+        rewards: List[List[float]] = []
+        next_states: List = []
+        action_probs: List[List[float]] = []
+        dones: List[List[float]] = []
+
         for transition in self.trajectory_buffer:
             state, action, reward, next_state, action_prob, done = transition
 
@@ -59,7 +130,7 @@ class PPO(nn.Module):
             rewards.append([reward])
             next_states.append(next_state)
             action_probs.append([action_prob])
-            done_mask = 0 if done else 1
+            done_mask = 0.0 if done else 1.0
             dones.append([done_mask])
 
         batch_states = torch.tensor(states, dtype=torch.float)
@@ -79,7 +150,16 @@ class PPO(nn.Module):
             batch_action_probs,
         )
 
-    def train_net(self):
+    def train_net(self) -> None:
+        """
+        Update policy and value networks using PPO algorithm.
+        
+        Implements the core PPO training loop including:
+        - GAE advantage computation
+        - Policy ratio clipping
+        - Value function updates
+        - Combined loss optimization
+        """
         (
             states,
             actions,
@@ -98,8 +178,8 @@ class PPO(nn.Module):
             value_error = value_error.detach().numpy()
 
             # Compute Generalized Advantage Estimation (GAE)
-            advantages = []
-            gae = 0.0
+            advantages: List[List[float]] = []
+            gae: float = 0.0
             for delta in value_error[::-1]:
                 gae = DISCOUNT_FACTOR * GAE_LAMBDA * gae + delta[0]
                 advantages.append([gae])
@@ -132,21 +212,30 @@ class PPO(nn.Module):
             self.optimizer.step()
 
 
-def main():
+def main() -> None:
+    """
+    Main training loop for the PPO agent on CartPole environment.
+    
+    Handles:
+    - Environment interaction
+    - Experience collection
+    - Training updates
+    - Progress tracking and visualization
+    """
     env = gym.make("CartPole-v1")
     agent = PPO()
-    total_reward = 0.0
-    print_interval = PRINT_FREQUENCY
+    total_reward: float = 0.0
+    print_interval: int = PRINT_FREQUENCY
 
     # Initialize tracking variables
-    rewards_history = []
-    policy_entropy_history = []
-    avg_reward = 0.0
+    rewards_history: List[float] = []
+    policy_entropy_history: List[float] = []
+    avg_reward: float = 0.0
 
     for episode in range(MAX_EPISODES):
         state, _ = env.reset()
-        episode_done = False
-        episode_reward = 0.0
+        episode_done: bool = False
+        episode_reward: float = 0.0
 
         while not episode_done:
             for timestep in range(TIMESTEPS_PER_BATCH):
@@ -159,7 +248,7 @@ def main():
                     (
                         state,
                         action,
-                        reward / 100.0,
+                        reward / 100.0,  # Normalize rewards
                         next_state,
                         action_probs[action].item(),
                         episode_done,
@@ -194,11 +283,11 @@ def main():
 
             # Plot average reward curve with min/max shaded region
             plt.figure(figsize=(10, 5))
-            rewards_array = np.array(rewards_history)
-            window_size = 10
-            min_rewards = []
-            max_rewards = []
-            mean_rewards = []
+            rewards_array: NDArray = np.array(rewards_history)
+            window_size: int = 10
+            min_rewards: List[float] = []
+            max_rewards: List[float] = []
+            mean_rewards: List[float] = []
 
             for i in range(len(rewards_array) - window_size + 1):
                 window = rewards_array[i : i + window_size]
