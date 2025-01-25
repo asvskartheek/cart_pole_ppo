@@ -1,8 +1,8 @@
 """
-Proximal Policy Optimization (PPO) Implementation for CartPole Environment
+Proximal Policy Optimization (PPO) Implementation for Gymnasium Environments
 
 This module implements PPO, an on-policy reinforcement learning algorithm, to solve
-the CartPole-v1 environment from OpenAI Gymnasium. PPO is known for its stability
+environments from OpenAI Gymnasium. PPO is known for its stability
 and reliability in training deep RL agents.
 
 The implementation includes:
@@ -12,19 +12,14 @@ The implementation includes:
 - Value function loss for better state value estimation
 - Policy entropy tracking for monitoring exploration
 
-Key Features:
-- Shared neural network architecture for policy and value functions
-- Experience collection using trajectory buffer
-- PPO-specific objective function with clipping
-- Visualization of training progress and policy entropy
-
 Example usage:
-    python ppo.py
+    python ppo.py -e "CartPole-v1"
+    python ppo.py -e "LunarLander-v2" --lr 1e-4 --batch-size 32
 
 The script will train the agent and generate training curves once solved.
 """
 
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Literal
 import gymnasium as gym
 import torch
 import torch.nn as nn
@@ -34,16 +29,42 @@ from torch.distributions import Categorical
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy.typing import NDArray
+import argparse
 
-# Hyperparameters
-LEARNING_RATE: float = 5e-4  # Learning rate for Adam optimizer
-DISCOUNT_FACTOR: float = 0.98  # Discount factor for future rewards
-GAE_LAMBDA: float = 0.95  # Lambda parameter for GAE
-EPSILON_CLIP: float = 0.1  # PPO clipping parameter
-EPOCHS_PER_UPDATE: int = 3  # Number of epochs per policy update
-TIMESTEPS_PER_BATCH: int = 20  # Number of timesteps per training batch
-PRINT_FREQUENCY: int = 20  # Episodes between printing progress
-MAX_EPISODES: int = 10_000  # Maximum number of training episodes
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description='Train PPO agent on Gym environment')
+    parser.add_argument('-e', '--env', type=str, default='CartPole-v1',
+                      choices=['CartPole-v1', 'LunarLander-v2', 'Acrobot-v1', 'MountainCar-v0'],
+                      help='Gym environment name')
+    parser.add_argument('--lr', type=float, default=5e-4,
+                      help='Learning rate')
+    parser.add_argument('--gamma', type=float, default=0.98,
+                      help='Discount factor')
+    parser.add_argument('--gae-lambda', type=float, default=0.95,
+                      help='GAE lambda parameter')
+    parser.add_argument('--epsilon', type=float, default=0.1,
+                      help='PPO clipping parameter')
+    parser.add_argument('--epochs', type=int, default=3,
+                      help='Number of epochs per update')
+    parser.add_argument('--batch-size', type=int, default=20,
+                      help='Timesteps per batch')
+    parser.add_argument('--max-episodes', type=int, default=10000,
+                      help='Maximum number of episodes')
+    parser.add_argument('--print-freq', type=int, default=20,
+                      help='Print frequency')
+    return parser.parse_args()
+
+# Get hyperparameters from arguments
+args = parse_args()
+LEARNING_RATE: float = args.lr
+DISCOUNT_FACTOR: float = args.gamma
+GAE_LAMBDA: float = args.gae_lambda
+EPSILON_CLIP: float = args.epsilon
+EPOCHS_PER_UPDATE: int = args.epochs
+TIMESTEPS_PER_BATCH: int = args.batch_size
+PRINT_FREQUENCY: int = args.print_freq
+MAX_EPISODES: int = args.max_episodes
 
 
 class PPO(nn.Module):
@@ -55,16 +76,20 @@ class PPO(nn.Module):
     collection, advantage computation, and policy updates.
     """
     
-    def __init__(self) -> None:
+    def __init__(self, obs_dim: int, act_dim: int) -> None:
         """
         Initialize the PPO agent with neural network architecture and optimizer.
+        
+        Args:
+            obs_dim: Dimension of observation space
+            act_dim: Dimension of action space
         """
         super(PPO, self).__init__()
         self.trajectory_buffer: List[Tuple] = []
 
         # Neural network architecture
-        self.shared_layer = nn.Linear(4, 256)  # Shared features
-        self.policy_head = nn.Linear(256, 2)  # Policy output (2 actions)
+        self.shared_layer = nn.Linear(obs_dim, 256)  # Shared features
+        self.policy_head = nn.Linear(256, act_dim)  # Policy output
         self.value_head = nn.Linear(256, 1)  # Value function
         self.optimizer = optim.Adam(self.parameters(), lr=LEARNING_RATE)
 
@@ -214,7 +239,7 @@ class PPO(nn.Module):
 
 def main() -> None:
     """
-    Main training loop for the PPO agent on CartPole environment.
+    Main training loop for the PPO agent on specified environment.
     
     Handles:
     - Environment interaction
@@ -222,8 +247,11 @@ def main() -> None:
     - Training updates
     - Progress tracking and visualization
     """
-    env = gym.make("CartPole-v1")
-    agent = PPO()
+    env = gym.make(args.env)
+    obs_dim = env.observation_space.shape[0]
+    act_dim = env.action_space.n
+    
+    agent = PPO(obs_dim, act_dim)
     total_reward: float = 0.0
     print_interval: int = PRINT_FREQUENCY
 
@@ -231,6 +259,10 @@ def main() -> None:
     rewards_history: List[float] = []
     policy_entropy_history: List[float] = []
     avg_reward: float = 0.0
+
+    print(f"Training on {args.env}")
+    print(f"Observation space dimension: {obs_dim}")
+    print(f"Action space dimension: {act_dim}")
 
     for episode in range(MAX_EPISODES):
         state, _ = env.reset()
@@ -276,10 +308,14 @@ def main() -> None:
             print(f"Episode: {episode}, Average Reward: {avg_reward:.1f}")
             total_reward = 0.0
 
-        if avg_reward > 495:
+        # Check if environment is solved based on environment-specific thresholds
+        if (args.env == "CartPole-v1" and avg_reward > 495) or \
+           (args.env == "LunarLander-v2" and avg_reward > 200) or \
+           (args.env == "Acrobot-v1" and avg_reward > -100) or \
+           (args.env == "MountainCar-v0" and avg_reward > -110):
             print("Solved!")
             # Save model state dict
-            torch.save(agent.state_dict(), "ppo_model.pt")
+            torch.save(agent.state_dict(), f"ppo_model_{args.env}.pt")
 
             # Plot average reward curve with min/max shaded region
             plt.figure(figsize=(10, 5))
@@ -300,23 +336,23 @@ def main() -> None:
             plt.plot(
                 x, mean_rewards, color="darkblue", linewidth=2, label="Mean Reward"
             )
-            plt.title("PPO Training Progress")
+            plt.title(f"PPO Training Progress - {args.env}")
             plt.xlabel("Episode")
             plt.ylabel("Reward")
             plt.grid(True)
             plt.legend()
-            plt.savefig("training_rewards.png")
+            plt.savefig(f"training_rewards_{args.env}.png")
             plt.close()
 
             # Plot policy distribution over time
             plt.figure(figsize=(10, 5))
             plt.plot(policy_entropy_history, label="Policy Entropy")
-            plt.title("Policy Distribution Over Time")
+            plt.title(f"Policy Distribution Over Time - {args.env}")
             plt.xlabel("Episode")
             plt.ylabel("Policy Entropy")
             plt.legend()
             plt.grid(True)
-            plt.savefig("policy_entropy.png")
+            plt.savefig(f"policy_entropy_{args.env}.png")
             plt.close()
 
             break
